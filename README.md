@@ -69,7 +69,7 @@ When installed (`pip install` or `make install-pipx`), `ap-discover-targetname` 
 | `--dryrun` | Print the renames without renaming |
 | `--debug` | Enable debug output, including per-frame RA/DEC and separation |
 | `--quiet`, `-q` | Suppress non-essential output |
-| `--log-file PATH` | Write log output to a file |
+| `--log-file PATH` | Write log output to a file; errors still print to the terminal |
 
 ### Example
 

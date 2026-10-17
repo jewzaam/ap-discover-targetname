@@ -382,6 +382,7 @@ class TestDiscoverTargetnames:
             tmp_path, name="2026-10-15_08-12-10.fits", date="2026-10-15"
         )
         reference = raw_path(tmp_path, PRIMARY_RIG, "2026-10-14_08-11-07.fits")
+        reference.parent.mkdir(parents=True)
         mock_get_metadata.side_effect = [
             {str(reference): make_datum(reference, targetname="Cocoon Nebula")},
             {
@@ -412,15 +413,30 @@ class TestDiscoverTargetnames:
         assert source_call.kwargs["recursive"] is True
 
     @patch("ap_common.get_filtered_metadata")
-    def test_no_reference_raises(self, mock_get_metadata):
+    def test_no_reference_raises(self, mock_get_metadata, tmp_path):
         mock_get_metadata.return_value = {
             "p": make_reference_datum("p.fits", targetname=None),
         }
 
         with pytest.raises(ValueError, match="No reference"):
             discover_targetnames(
-                "source", "reference", max_separation_degrees=1.0, quiet=True
+                str(tmp_path), str(tmp_path), max_separation_degrees=1.0, quiet=True
             )
+
+    @pytest.mark.parametrize("missing", ["source", "reference"])
+    @patch("ap_common.get_filtered_metadata")
+    def test_missing_directory_raises(self, mock_get_metadata, missing, tmp_path):
+        dirs = {"source": str(tmp_path), "reference": str(tmp_path)}
+        dirs[missing] = str(tmp_path / "30_Data")
+
+        with pytest.raises(ValueError, match="Directory not found"):
+            discover_targetnames(
+                dirs["source"],
+                dirs["reference"],
+                max_separation_degrees=1.0,
+                quiet=True,
+            )
+        mock_get_metadata.assert_not_called()
 
 
 class TestRealHeaders:
@@ -572,7 +588,7 @@ class TestMain:
         assert exit_info.value.code == discover_targetname.EXIT_ERROR
 
     @patch.object(discover_targetname, "discover_targetnames")
-    def test_log_file_resolved_and_written(self, mock_discover, tmp_path):
+    def test_log_file_resolved_and_written(self, mock_discover, tmp_path, capsys):
         mock_discover.side_effect = ValueError("boom")
         log_file = tmp_path / "logs" / "tool.log"
 
@@ -584,6 +600,8 @@ class TestMain:
         assert "boom" in log_text
         # expected input errors stay one line
         assert "Traceback" not in log_text
+        # and still reach the terminal, so a failed run is not silent
+        assert "boom" in capsys.readouterr().err
 
     @patch.object(discover_targetname, "discover_targetnames")
     def test_unexpected_error_logs_traceback(self, mock_discover, tmp_path):

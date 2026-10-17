@@ -17,6 +17,10 @@ htmlcov/
 mutants/
 .mutmut-cache
 
+# --log-file output
+*.log
+*.log.[0-9]*
+
 # Type checking
 .mypy_cache/
 

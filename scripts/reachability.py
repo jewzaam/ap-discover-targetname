@@ -43,7 +43,7 @@ EXCLUDED_EXACT = {
 # .git/ missing in the container — git would fail and the script
 # would silently report 0 content files.
 _EXCLUDED_DIR_PARTS = frozenset({
-    ".git", ".work", "__pycache__", "dist", ".eggs",
+    ".git", ".work", "__pycache__", "build", "dist", ".eggs",
     "venv", ".venv", "env", ".idea", ".vscode",
     ".pytest_cache", "htmlcov", ".mypy_cache",
 })
@@ -63,6 +63,9 @@ def _is_enum_excluded(rel_path: Path) -> bool:
     if name == "ANALYSIS.md":
         return True
     if name.startswith("Findings-") or name.startswith("Report-"):
+        return True
+    # --log-file output (and its rotated backups), gitignored
+    if name.endswith(".log") or ".log." in name:
         return True
     return False
 

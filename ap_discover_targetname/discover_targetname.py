@@ -234,6 +234,10 @@ def discover_targetnames(
     Rename LIGHT frames in source_dir to carry the nearest reference target.
     Returns counts keyed by RESULT_* value.
     """
+    for directory in (source_dir, reference_dir):
+        if not os.path.isdir(directory):
+            raise ValueError(f"Directory not found: {directory}")
+
     reference_data = load_frames(
         reference_dir,
         [
@@ -283,13 +287,20 @@ def _configure_logging(*, debug: bool, quiet: bool, log_file: str | None) -> Non
         handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=DATE_FORMAT))
         tool_logger.handlers.clear()
         tool_logger.addHandler(handler)
+        # errors still reach the terminal so a failed run is not silent
+        stderr_handler = logging.StreamHandler(sys.stderr)
+        stderr_handler.setLevel(logging.ERROR)
+        stderr_handler.setFormatter(logging.Formatter("%(message)s"))
+        tool_logger.addHandler(stderr_handler)
 
 
 def main() -> None:
     """Main entry point for the command-line interface."""
     parser = argparse.ArgumentParser(
+        # explicit: sys.argv[0] under the Windows pipx shim is "python.exe <path>"
+        prog="ap-discover-targetname",
         description="Append OBJECT_<target> to filenames of LIGHT frames using "
-        "the nearest reference target by RA/DEC"
+        "the nearest reference target by RA/DEC",
     )
     parser.add_argument(
         "source_dir", type=str, help="directory of frames missing a target"
@@ -301,12 +312,14 @@ def main() -> None:
         "--max-separation",
         type=float,
         default=config.DEFAULT_MAX_SEPARATION_DEGREES,
+        metavar="DEG",
         help="max degrees to nearest reference target",
     )
     parser.add_argument(
         "--max-reference-lights",
         type=int,
         default=None,
+        metavar="N",
         help="max reference frames used per target (default: all)",
     )
     parser.add_argument("--debug", action="store_true", help="enable debug output")
@@ -317,7 +330,11 @@ def main() -> None:
         "--quiet", "-q", action="store_true", help="suppress non-essential output"
     )
     parser.add_argument(
-        "--log-file", type=str, default=None, help="write log output to file"
+        "--log-file",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="write log output to file",
     )
 
     args = parser.parse_args()

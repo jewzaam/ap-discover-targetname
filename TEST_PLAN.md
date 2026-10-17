@@ -109,7 +109,8 @@ Each test starts with one placeholder frame in `RAW/Raptor@f4.5+XSi/DATE_2026-10
 | Test | Starting Data | Expected |
 |------|---------------|----------|
 | `test_renames_and_counts` | Reference dir `RAW/SQA55@f5.3+AP26CC`: one Cocoon Nebula frame in `DATE_2026-10-14`. Source dir `RAW/Raptor@f4.5+XSi`: `DATE_2026-10-14/` has one frame at the Cocoon Nebula center and one slew frame at (0, 0); `DATE_2026-10-15/` has one frame at the Cocoon Nebula center | Counts `renamed=2, unmatched=1, skipped=0`; each matched frame renamed inside its own DATE directory; slew frame unchanged; reference loaded from the reference rig dir requiring `targetname`; source loaded from the secondary rig dir, recursive, `type=LIGHT` |
-| `test_no_reference_raises` | Reference: one frame with no target | `ValueError` matching `No reference` |
+| `test_no_reference_raises` | Both dirs exist; reference: one frame with no target | `ValueError` matching `No reference` |
+| `test_missing_directory_raises` | Parametrized: source or reference dir set to a nonexistent `30_Data` | `ValueError` matching `Directory not found`; no metadata loaded |
 
 #### `main()` — `TestMain`
 
@@ -123,7 +124,7 @@ Each test starts with one placeholder frame in `RAW/Raptor@f4.5+XSi/DATE_2026-10
 | `test_debug_flag_configures_logging` | Parametrized `--debug` and no flag; `setup_logging` wrapped | `setup_logging` called with `debug=True` / `debug=False` |
 | `test_missing_positional_exits_usage_error` | Args `src` only | `SystemExit` code 2 |
 | `test_error_exits_error` | Args `src ref`; mock raises `ValueError` | Exit `EXIT_ERROR` |
-| `test_log_file_resolved_and_written` | Args `src ref --log-file <tmp_path>/logs/tool.log` (directory absent); mock raises `ValueError("boom")` | Log directory created; log file contains `boom`, no traceback |
+| `test_log_file_resolved_and_written` | Args `src ref --log-file <tmp_path>/logs/tool.log` (directory absent); mock raises `ValueError("boom")` | Log directory created; log file contains `boom`, no traceback; stderr also contains `boom` |
 | `test_unexpected_error_logs_traceback` | Args `src ref --log-file <tmp_path>/tool.log`; mock raises `RuntimeError("kaboom")` | Exit `EXIT_ERROR`; log file contains `Traceback` and `kaboom` |
 
 ### Integration Tests

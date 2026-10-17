@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ap-discover-targetname"
 version = "0.1.0"
-description = "Append target names to untargeted light frames using the nearest reference frame by RA/DEC"
+description = "Append target names to untargeted light frames using the nearest reference target by RA/DEC"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {file = "LICENSE"}
@@ -28,7 +28,8 @@ classifiers = [
 ]
 
 dependencies = [
-    "ap-common @ git+https://github.com/jewzaam/ap-common.git",
+    # pinned: reproducible installs of the header parser this tool renames from
+    "ap-common @ git+https://github.com/jewzaam/ap-common.git@31b6719aeba479002b07acb50bf9fd2025eb4e4a",
 ]
 
 [project.scripts]
@@ -39,6 +40,9 @@ dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "pytest-mock>=3.0",
+    # write real FITS fixtures for the header contract test
+    "astropy>=6.0.0",
+    "numpy>=2.5",
     "black>=23.0",
     "flake8>=6.0",
     "mypy>=1.11",

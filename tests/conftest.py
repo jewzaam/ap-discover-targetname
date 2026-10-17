@@ -15,12 +15,18 @@ def _block_rename_outside_tmp_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The tool renames real image files; never let a test touch one."""
-    original_rename = os.rename
+    root = tmp_path.resolve()
 
-    def guarded(src, dst, *args, **kwargs):
-        for path in (src, dst):
-            if not str(Path(path).resolve()).startswith(str(tmp_path.resolve())):
-                raise PermissionError(f"Test tried to rename outside tmp_path: {path}")
-        return original_rename(src, dst, *args, **kwargs)
+    def _guard(original):
+        def guarded(src, dst, *args, **kwargs):
+            for path in (src, dst):
+                if not Path(path).resolve().is_relative_to(root):
+                    raise PermissionError(
+                        f"Test tried to rename outside tmp_path: {path}"
+                    )
+            return original(src, dst, *args, **kwargs)
 
-    monkeypatch.setattr(os, "rename", guarded)
+        return guarded
+
+    for name in ("rename", "replace"):
+        monkeypatch.setattr(os, name, _guard(getattr(os, name)))

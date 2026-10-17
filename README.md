@@ -5,7 +5,7 @@
 [![test](https://github.com/jewzaam/ap-discover-targetname/actions/workflows/test.yml/badge.svg)](https://github.com/jewzaam/ap-discover-targetname/actions/workflows/test.yml) [![quality](https://github.com/jewzaam/ap-discover-targetname/actions/workflows/quality.yml/badge.svg)](https://github.com/jewzaam/ap-discover-targetname/actions/workflows/quality.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/) [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-Assigns target names to light frames that have none, using the nearest frame by mount RA/DEC from a reference imaging train.
+Assigns target names to light frames that have none, using the nearest target by mount RA/DEC from a reference imaging train.
 
 ## Documentation
 
@@ -15,7 +15,7 @@ This tool is part of the astrophotography pipeline. See [ap-base](https://github
 
 On a dual rig, the second camera often captures continuously with no target set, so its frames have no `OBJECT` header. Both cameras share the mount, so both write the same `RA`/`DEC`.
 
-Each target in `reference_dir` gets one position: the median RA/DEC of its LIGHT frames, so outlier frames (bad slews, lost guiding) don't shift it. For each LIGHT frame in `source_dir`, the tool finds the nearest target by angular separation. If the separation is within `--max-separation`, it renames the frame to append `_OBJECT_<target>`:
+Each target in `reference_dir` gets one position: the median of its LIGHT frames' positions, taken on the sphere (per-component median of unit vectors), so outlier frames (bad slews, lost guiding) don't shift it and RA wrap at 0/360 is handled. For each LIGHT frame in `source_dir`, the tool finds the nearest target by angular separation. If the separation is within `--max-separation`, it renames the frame to append `_OBJECT_<target>`:
 
 ```text
 2026-10-14_08-12-10_HFR_2.77_RMSAC_0.00_TEMP_26.00.fits
@@ -24,7 +24,9 @@ Each target in `reference_dir` gets one position: the median RA/DEC of its LIGHT
 
 - The target name comes from the reference frame's `OBJECT` header. Mosaic panels (`M31 Panel 1`) are separate targets, each with its own position.
 - Frames with no match (slews, parked, between targets) are left unchanged.
-- Skips and warns on: frames already carrying `_OBJECT_`, frames without RA/DEC, targets containing `_`, and destinations that already exist.
+- Skips and warns on: frames that already have a target, frames with missing or invalid RA/DEC, destinations that already exist, and renames that fail (the run continues).
+- Frames already renamed (`_OBJECT_` in the filename) are skipped silently, so a re-run is quiet; `--debug` shows them.
+- Reference targets whose name can't go in a filename (`_`, path separators, or `:*?"<>|`) are excluded with one warning each.
 
 Pipeline position, run against the raw secondary frames:
 
@@ -54,13 +56,16 @@ python -m pip install git+https://github.com/jewzaam/ap-discover-targetname.git
 python -m ap_discover_targetname <source_dir> <reference_dir> [options]
 ```
 
+When installed (`pip install` or `make install-pipx`), `ap-discover-targetname` is the same command.
+
 ### Options
 
 | Option | Description |
 |--------|-------------|
 | `source_dir` | Directory of frames missing a target (searched recursively) |
-| `reference_dir` | Directory of frames with a target (searched recursively) |
+| `reference_dir` | Directory of frames defining the targets (searched recursively) |
 | `--max-separation DEG` | Max degrees to the nearest reference target (default: 1.0) |
+| `--max-reference-lights N` | Max reference frames used per target and panel (default: all) |
 | `--dryrun` | Print the renames without renaming |
 | `--debug` | Enable debug output, including per-frame RA/DEC and separation |
 | `--quiet`, `-q` | Suppress non-essential output |
@@ -79,6 +84,8 @@ python -m ap_discover_targetname "<raw_secondary_dir>" "<raw_primary_dir>"
 ## Development
 
 ```bash
-make check   # format check, lint, typecheck, tests, coverage
+make check   # format check, lint, typecheck, tests, coverage, reachability
 make format  # rewrite sources with black
 ```
+
+See [TEST_PLAN.md](TEST_PLAN.md) for what each test covers and its starting data.

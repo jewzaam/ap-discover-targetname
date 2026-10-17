@@ -16,8 +16,8 @@ This project follows the [Testing Standards](https://github.com/jewzaam/standard
 Key testing principles for this project:
 
 - Matching and renaming are tested on in-memory metadata dicts, the same shape ap-common returns, so no FITS files are needed
-- Renames happen on placeholder files in `tmp_path`; a `conftest.py` guard fails any test that calls `os.rename` outside `tmp_path`
-- ap-common metadata loading is mocked; tests verify the arguments passed to it, not ap-common itself
+- Renames happen on placeholder files in `tmp_path`; a `conftest.py` guard fails any test that calls `os.rename` or `os.replace` on a path outside `tmp_path`
+- ap-common metadata loading is mocked in unit tests; one integration test (`TestRealHeaders`) runs it unmocked on real FITS files to pin the header-key contract
 
 ## Shared Test Data
 
@@ -30,6 +30,7 @@ All tests in `tests/test_discover_targetname.py`.
 | `make_datum(filename, ra="328.4", dec="47.27", targetname=None)` | Normalized metadata dict: `filename`, `type=LIGHT`, `ra`, `dec`, `targetname`. Defaults sit exactly on the Cocoon Nebula center |
 | `make_reference_datum(name, ...)` | `make_datum` with filename `F:/RAW/SQA55@f5.3+AP26CC/DATE_2026-10-14/<name>`. Metadata only, no file: reference frames are never renamed |
 | `make_frame(tmp_path, name=..., date="2026-10-14")` | Creates a 4-byte placeholder file (`b"fits"`) at `<tmp_path>/RAW/Raptor@f4.5+XSi/DATE_<date>/<name>`. Default name `2026-10-14_08-12-10_HFR_2.77_RMSAC_0.00_TEMP_26.00.fits` |
+| `write_fits(path, headers)` | Writes a real 2×2 `uint16` FITS file with the given primary-header keywords |
 
 ## Test Categories
 
@@ -67,6 +68,16 @@ All tests in `tests/test_discover_targetname.py`.
 | `test_ignores_frames_without_target_or_coordinates` | Five frames: one valid Cocoon Nebula; one with no target; one with `ra=None`; one with `dec="bad"`; one with only `filename` (target and RA/DEC keys absent) | Only `Cocoon Nebula` at (328.4, 47.27) |
 | `test_one_entry_per_target` | Two Cocoon Nebula frames, one North America Nebula frame at (314.7, 44.53) | Exactly two entries; North America Nebula at its frame's position |
 | `test_panels_are_separate_targets` | M31 `panel=1` at (10.0, 41.0); M31 `panel=2` at (11.5, 41.0); M33 `panel=""` at (23.5, 30.7) | Keys `M31 Panel 1`, `M31 Panel 2`, `M33`; panel 2 at (11.5, 41.0) |
+| `test_outlier_frame_does_not_move_target` | Four Cocoon Nebula frames: three clustered near (328.4, 47.27), one bad-slew outlier at RA 10.0 listed first | Center within 0.02° of (328.4, 47.27), not the first frame's position |
+| `test_max_frames_per_target_caps_each_target_and_panel` | Cap 2. Three Cocoon Nebula frames (third at RA 20, far off); M31 `panel=1` and `panel=2` frames | Keys `Cocoon Nebula`, `M31 Panel 1`, `M31 Panel 2`; Cocoon center at (328.4, 47.27), third frame unused |
+| `test_target_unusable_in_filename_is_excluded` | Parametrized target `NGC_7000`, `M31/x`, `a:b`, `what?`, plus a valid North America Nebula frame | Only `North America Nebula` in the reference |
+
+#### `parse_coordinates()` — `TestParseCoordinates`
+
+| Test | Starting Data | Expected |
+|------|---------------|----------|
+| `test_valid` | `ra="328.4"`, `dec="-47.27"` | `(328.4, -47.27)` |
+| `test_non_finite_or_out_of_range_is_none` | Parametrized: `nan` RA, `inf` DEC, RA 361, RA -1, DEC 90.1, DEC -90.1 | `None` |
 
 #### `build_target_filename()` — `TestBuildTargetFilename`
 
@@ -87,7 +98,8 @@ Each test starts with one placeholder frame in `RAW/Raptor@f4.5+XSi/DATE_2026-10
 | `test_already_marked_is_skipped` | Frame named `x_OBJECT_Cocoon Nebula.fits` | `skipped`; file unchanged (re-run is safe) |
 | `test_missing_coordinates_is_skipped` | Frame with `ra=""` | `skipped`; file unchanged |
 | `test_absent_coordinate_keys_is_skipped` | Datum with only `filename` (no `ra`/`dec` keys) | `skipped`; file unchanged |
-| `test_underscore_in_target_is_skipped` | Reference target `NGC_7000` at the frame's position | `skipped`; file unchanged |
+| `test_existing_target_is_skipped` | Frame datum with `targetname="North America Nebula"` (already has `OBJECT`, or source overlaps reference) | `skipped`; file unchanged |
+| `test_rename_failure_is_skipped` | `os.rename` patched to raise `PermissionError` (locked file) | `skipped`; file unchanged; no exception |
 | `test_existing_destination_is_skipped` | Frame `x.fits` plus an existing `x_OBJECT_Cocoon Nebula.fits` | `skipped`; source unchanged; existing file content unchanged |
 
 #### `discover_targetnames()` — `TestDiscoverTargetnames`
@@ -106,22 +118,31 @@ Each test starts with one placeholder frame in `RAW/Raptor@f4.5+XSi/DATE_2026-10
 | Test | Starting Data | Expected |
 |------|---------------|----------|
 | `test_passes_arguments_and_exits_success` | Args `src ref --max-separation 0.5 --dryrun`; mock returns `renamed=2, unmatched=3, skipped=1` | Exit `EXIT_SUCCESS`; called with `max_separation_degrees=0.5, dryrun=True, quiet=False`; stdout `Would rename 2 file(s), unmatched 3, skipped 1` |
+| `test_each_flag_maps_to_kwarg` | Parametrized: no flags; `--max-reference-lights 20`; `--dryrun`; `--max-separation 0.5`; `--quiet`; `-q` | No flags: `max_separation_degrees=DEFAULT_MAX_SEPARATION_DEGREES, max_reference_lights=None, dryrun=False, quiet=False`; each flag alone sets only its kwarg |
+| `test_quiet_suppresses_summary` | Parametrized `--quiet`, `-q`; mock returns non-zero counts | Exit `EXIT_SUCCESS`; stdout empty |
+| `test_debug_flag_configures_logging` | Parametrized `--debug` and no flag; `setup_logging` wrapped | `setup_logging` called with `debug=True` / `debug=False` |
+| `test_missing_positional_exits_usage_error` | Args `src` only | `SystemExit` code 2 |
 | `test_error_exits_error` | Args `src ref`; mock raises `ValueError` | Exit `EXIT_ERROR` |
-| `test_log_file_resolved_and_written` | Args `src ref --log-file <tmp_path>/logs/tool.log` (directory absent); mock raises `ValueError("boom")` | Log directory created; log file contains `boom` |
+| `test_log_file_resolved_and_written` | Args `src ref --log-file <tmp_path>/logs/tool.log` (directory absent); mock raises `ValueError("boom")` | Log directory created; log file contains `boom`, no traceback |
+| `test_unexpected_error_logs_traceback` | Args `src ref --log-file <tmp_path>/tool.log`; mock raises `RuntimeError("kaboom")` | Exit `EXIT_ERROR`; log file contains `Traceback` and `kaboom` |
 
 ### Integration Tests
 
-| Workflow | Components | Test Coverage | Notes |
-|----------|------------|---------------|-------|
-| | | | |
+#### Real headers — `TestRealHeaders`
+
+No mocks: real FITS files, real ap-common header loading and normalization, real renames.
+
+| Test | Starting Data | Expected |
+|------|---------------|----------|
+| `test_renames_from_real_fits_headers` | `RAW/SQA55@f5.3+AP26CC/DATE_2026-10-14/`: one FITS with `IMAGETYP=LIGHT`, `RA=328.4`, `DEC=47.27`, `OBJECT=Cocoon Nebula`. `RAW/Raptor@f4.5+XSi/DATE_2026-10-14/`: one FITS with the same `IMAGETYP`/`RA`/`DEC` and no `OBJECT`, one with `OBJECT=North America Nebula` | Counts `renamed=1, unmatched=0, skipped=1`; untargeted frame renamed to `..._OBJECT_Cocoon Nebula.fits` in its DATE directory; frame with `OBJECT` unchanged |
 
 ## Untested Areas
 
 | Area | Reason Not Tested |
 |------|-------------------|
-| Header reading and normalization (`RA`/`DEC` → `ra`/`dec`, `OBJECT` → `targetname`/`panel`) | Tested in ap-common; tests use dicts in the shape ap-common returns |
-| Real FITS/XISF files | No header I/O in this project; covered by ap-common |
-| Recursive file discovery under the rig directory | `get_filtered_metadata` is mocked; tests assert `recursive=True` is passed and that renames stay in each frame's own directory |
+| XISF files | Same ap-common loading path as FITS; only FITS is exercised by `TestRealHeaders` |
+| Non-atomic exists-then-rename on POSIX | Single operator on a quiet raw directory; Windows `os.rename` refuses to overwrite |
+| Filename parsing of the appended `OBJECT_<target>` by downstream tools | Behavior of ap-common `get_file_headers` in ap-preserve-header / ap-move-raw-light-to-blink; traced, not tested here |
 | Filename parsing of the appended `OBJECT_<target>` by downstream tools | Behavior of ap-common `get_file_headers`; traced, not tested here |
 
 ## Bug Fix Testing Protocol
@@ -184,3 +205,5 @@ When modifying this project:
 | Date | Change | Rationale |
 |------|--------|-----------|
 | 2026-10-17 | Initial test plan | Project creation |
+| 2026-10-17 | Added real-FITS integration test, coordinate validation, target exclusion, rename-failure and traceback tests | Review findings I0, S5, S7, S10, S13, N0, N2, N5, N6, N8 |
+| 2026-10-17 | Added per-flag, quiet, debug and usage-error `main()` tests | Standards finding I0 (cli/testing.md) |

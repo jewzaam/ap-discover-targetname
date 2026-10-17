@@ -15,6 +15,11 @@ NORMALIZED_HEADER_DEC = "dec"
 # Filename marker ap-common parses into the OBJECT header
 OBJECT_FILENAME_MARKER = "_OBJECT_"
 
+# Characters a target name cannot contain once appended to a filename:
+# "_" splits ap-common filename chunks (OBJECT_NGC_7000 parses as NGC), the rest
+# are path separators or reserved on Windows
+INVALID_TARGET_CHARACTERS = '_/\\:*?"<>|'
+
 # Default max separation between a frame and the nearest reference target
 # ponytail: guess, tune with --max-separation after a --dryrun
 DEFAULT_MAX_SEPARATION_DEGREES = 1.0

@@ -55,12 +55,16 @@ def parse_coordinates(datum: dict) -> tuple[float, float] | None:
     """Return (ra, dec) in degrees, or None if either is missing or invalid."""
     # .get(): ap-common enrichment replaces the datum, dropping absent headers
     try:
-        return (
-            float(datum.get(config.NORMALIZED_HEADER_RA, "")),
-            float(datum.get(config.NORMALIZED_HEADER_DEC, "")),
-        )
+        ra = float(datum.get(config.NORMALIZED_HEADER_RA, ""))
+        dec = float(datum.get(config.NORMALIZED_HEADER_DEC, ""))
     except (TypeError, ValueError):
         return None
+    # NaN/inf or out-of-range would poison a target's median or every match
+    if not (math.isfinite(ra) and math.isfinite(dec)):
+        return None
+    if not (0 <= ra <= 360 and -90 <= dec <= 90):
+        return None
+    return ra, dec
 
 
 def load_frames(directory: str, required_properties: list, *, quiet: bool) -> dict:
@@ -97,8 +101,13 @@ def target_center(coordinates: list[tuple[float, float]]) -> tuple[float, float]
     )
 
 
-def build_reference(reference_data: dict) -> dict[str, tuple[float, float]]:
-    """Return {target: (ra, dec)} with the median position of each target."""
+def build_reference(
+    reference_data: dict, *, max_frames_per_target: int | None = None
+) -> dict[str, tuple[float, float]]:
+    """
+    Return {target: (ra, dec)} with the median position of each target, using at
+    most max_frames_per_target frames per target+panel (None = all).
+    """
     coordinates_by_target: dict[str, list[tuple[float, float]]] = {}
     for datum in reference_data.values():
         target = datum.get(NORMALIZED_HEADER_TARGETNAME)
@@ -106,6 +115,14 @@ def build_reference(reference_data: dict) -> dict[str, tuple[float, float]]:
         if target and panel:
             # undo ap-common's panel split so normalization splits it again later
             target = f"{target} Panel {panel}"
+        # target already full: skip before parsing. Can't break, a later frame
+        # may be a target not seen yet
+        if (
+            target
+            and max_frames_per_target is not None
+            and len(coordinates_by_target.get(target, [])) >= max_frames_per_target
+        ):
+            continue
         coordinates = parse_coordinates(datum)
         if not target or coordinates is None:
             logger.debug(
@@ -114,10 +131,18 @@ def build_reference(reference_data: dict) -> dict[str, tuple[float, float]]:
             )
             continue
         coordinates_by_target.setdefault(target, []).append(coordinates)
-    return {
-        target: target_center(coordinates)
-        for target, coordinates in coordinates_by_target.items()
-    }
+
+    reference: dict[str, tuple[float, float]] = {}
+    for target, frame_coordinates in coordinates_by_target.items():
+        invalid = sorted(set(target) & set(config.INVALID_TARGET_CHARACTERS))
+        if invalid:
+            logger.warning(
+                f"Target '{target}' contains {invalid}, not usable in a filename; "
+                f"excluded from reference"
+            )
+            continue
+        reference[target] = target_center(frame_coordinates)
+    return reference
 
 
 def find_nearest_target(
@@ -154,9 +179,14 @@ def assign_frame(
         logger.debug(f"Already has target in filename, skipping: {filename}")
         return RESULT_SKIPPED
 
+    existing_target = datum.get(NORMALIZED_HEADER_TARGETNAME)
+    if existing_target:
+        logger.warning(f"Already has target '{existing_target}', skipping: {filename}")
+        return RESULT_SKIPPED
+
     coordinates = parse_coordinates(datum)
     if coordinates is None:
-        logger.warning(f"Missing RA/DEC, skipping: {filename}")
+        logger.warning(f"Missing or invalid RA/DEC, skipping: {filename}")
         return RESULT_SKIPPED
 
     target, separation = find_nearest_target(coordinates[0], coordinates[1], reference)
@@ -166,11 +196,6 @@ def assign_frame(
     )
     if target is None or separation > max_separation_degrees:
         return RESULT_UNMATCHED
-
-    # ap-common splits filename chunks on "_", so OBJECT_NGC_7000 parses as NGC
-    if "_" in target:
-        logger.warning(f"Target '{target}' contains '_', skipping: {filename}")
-        return RESULT_SKIPPED
 
     filename_dest = build_target_filename(filename, target)
     if os.path.exists(filename_dest):
@@ -182,9 +207,17 @@ def assign_frame(
             f"Would rename: {filename} -> {os.path.basename(filename_dest)} "
             f"(separation {separation:.4f} deg)"
         )
-    else:
+        return RESULT_RENAMED
+
+    # ponytail: exists-then-rename is not atomic and os.rename replaces on POSIX;
+    # fine for one operator on a quiet raw dir (Windows rename refuses to clobber)
+    try:
         os.rename(filename, filename_dest)
-        logger.debug(f"Renamed: {filename} -> {filename_dest}")
+    except OSError as e:
+        # one locked or unreadable file must not abort the rest of the run
+        logger.warning(f"Rename failed, skipping: {filename}: {e}")
+        return RESULT_SKIPPED
+    logger.debug(f"Renamed: {filename} -> {filename_dest}")
     return RESULT_RENAMED
 
 
@@ -193,12 +226,13 @@ def discover_targetnames(
     reference_dir: str,
     *,
     max_separation_degrees: float,
+    max_reference_lights: int | None = None,
     dryrun: bool = False,
     quiet: bool = False,
 ) -> dict[str, int]:
     """
-    Rename LIGHT frames in source_dir to carry the target of the nearest
-    reference frame. Returns counts keyed by RESULT_* value.
+    Rename LIGHT frames in source_dir to carry the nearest reference target.
+    Returns counts keyed by RESULT_* value.
     """
     reference_data = load_frames(
         reference_dir,
@@ -209,7 +243,9 @@ def discover_targetnames(
         ],
         quiet=quiet,
     )
-    reference = build_reference(reference_data)
+    reference = build_reference(
+        reference_data, max_frames_per_target=max_reference_lights
+    )
     if not reference:
         raise ValueError(
             f"No reference LIGHT frames with target name and RA/DEC: {reference_dir}"
@@ -253,19 +289,25 @@ def main() -> None:
     """Main entry point for the command-line interface."""
     parser = argparse.ArgumentParser(
         description="Append OBJECT_<target> to filenames of LIGHT frames using "
-        "the nearest reference frame by RA/DEC"
+        "the nearest reference target by RA/DEC"
     )
     parser.add_argument(
         "source_dir", type=str, help="directory of frames missing a target"
     )
     parser.add_argument(
-        "reference_dir", type=str, help="directory of frames with a target"
+        "reference_dir", type=str, help="directory of frames defining the targets"
     )
     parser.add_argument(
         "--max-separation",
         type=float,
         default=config.DEFAULT_MAX_SEPARATION_DEGREES,
         help="max degrees to nearest reference target",
+    )
+    parser.add_argument(
+        "--max-reference-lights",
+        type=int,
+        default=None,
+        help="max reference frames used per target (default: all)",
     )
     parser.add_argument("--debug", action="store_true", help="enable debug output")
     parser.add_argument(
@@ -274,7 +316,9 @@ def main() -> None:
     parser.add_argument(
         "--quiet", "-q", action="store_true", help="suppress non-essential output"
     )
-    parser.add_argument("--log-file", type=str, default=None, help="log to file")
+    parser.add_argument(
+        "--log-file", type=str, default=None, help="write log output to file"
+    )
 
     args = parser.parse_args()
     if args.log_file:
@@ -287,11 +331,16 @@ def main() -> None:
             args.source_dir,
             args.reference_dir,
             max_separation_degrees=args.max_separation,
+            max_reference_lights=args.max_reference_lights,
             dryrun=args.dryrun,
             quiet=args.quiet,
         )
-    except Exception as e:
-        logger.error(f"Error: {e}", exc_info=args.debug)
+    except ValueError as e:
+        # expected input problem (e.g. no usable reference frames): message only
+        logger.error(f"Error: {e}")
+        sys.exit(EXIT_ERROR)
+    except Exception:
+        logger.exception("Unexpected error")
         sys.exit(EXIT_ERROR)
 
     if not args.quiet:

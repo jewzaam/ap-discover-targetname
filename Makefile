@@ -23,7 +23,7 @@ PY_SYS ?= python3
 
 $(info venv: $(VENV_DIR))
 
-check: test-format test-lint test-typecheck test-unit test-coverage  ## Run full quality gate (default)
+check: test-format test-lint test-typecheck test-unit test-coverage test-reachability  ## Run full quality gate (default)
 
 .DEFAULT_GOAL := check
 

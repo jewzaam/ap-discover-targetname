@@ -101,20 +101,23 @@ def target_center(coordinates: list[tuple[float, float]]) -> tuple[float, float]
     )
 
 
-def build_reference(
-    reference_data: dict, *, max_frames_per_target: int | None = None
-) -> dict[str, tuple[float, float]]:
-    """
-    Return {target: (ra, dec)} with the median position of each target, using at
-    most max_frames_per_target frames per target+panel (None = all).
-    """
+def _reference_target(datum: dict) -> str | None:
+    """Target name of a reference frame, with the panel re-joined if present."""
+    target = datum.get(NORMALIZED_HEADER_TARGETNAME)
+    panel = datum.get(NORMALIZED_HEADER_PANEL)
+    if target and panel:
+        # undo ap-common's panel split so normalization splits it again later
+        return f"{target} Panel {panel}"
+    return target
+
+
+def _collect_coordinates(
+    reference_data: dict, *, max_frames_per_target: int | None
+) -> dict[str, list[tuple[float, float]]]:
+    """Group frame coordinates by target, capped at max_frames_per_target each."""
     coordinates_by_target: dict[str, list[tuple[float, float]]] = {}
     for datum in reference_data.values():
-        target = datum.get(NORMALIZED_HEADER_TARGETNAME)
-        panel = datum.get(NORMALIZED_HEADER_PANEL)
-        if target and panel:
-            # undo ap-common's panel split so normalization splits it again later
-            target = f"{target} Panel {panel}"
+        target = _reference_target(datum)
         # target already full: skip before parsing. Can't break, a later frame
         # may be a target not seen yet
         if (
@@ -131,6 +134,19 @@ def build_reference(
             )
             continue
         coordinates_by_target.setdefault(target, []).append(coordinates)
+    return coordinates_by_target
+
+
+def build_reference(
+    reference_data: dict, *, max_frames_per_target: int | None = None
+) -> dict[str, tuple[float, float]]:
+    """
+    Return {target: (ra, dec)} with the median position of each target, using at
+    most max_frames_per_target frames per target+panel (None = all).
+    """
+    coordinates_by_target = _collect_coordinates(
+        reference_data, max_frames_per_target=max_frames_per_target
+    )
 
     reference: dict[str, tuple[float, float]] = {}
     for target, frame_coordinates in coordinates_by_target.items():
